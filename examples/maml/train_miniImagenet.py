@@ -3,25 +3,29 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from torchmeta.datasets.helpers import omniglot
+from torchmeta.datasets.helpers import miniimagenet
 from torchmeta.utils.data import BatchMetaDataLoader
 
 from model import ConvolutionalNeuralNetwork
 from utils import update_parameters, get_accuracy
+import pdb
 
 def train(args):
-    dataset = omniglot(args.folder, shots=args.num_shots, ways=args.num_ways,
+    dataset = miniimagenet(args.folder, shots=args.num_shots, ways=args.num_ways,
         shuffle=True, test_shots=15, meta_train=True, download=args.download)
     dataloader = BatchMetaDataLoader(dataset, batch_size=args.batch_size,
         shuffle=True, num_workers=args.num_workers)
 
-    model = ConvolutionalNeuralNetwork(1, args.num_ways,
-        hidden_size=args.hidden_size)
+    model = ConvolutionalNeuralNetwork(3, args.num_ways,
+                                       hidden_size=args.hidden_size,
+                                       fc_in_size=32*5*5,
+                                       conv_kernel=[3,3,3,2])
     model.to(device=args.device)
     model.train()
     meta_optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     # Training loop
+    max_acc = 0
     with tqdm(dataloader, total=args.num_batches) as pbar:
         for batch_idx, batch in enumerate(pbar):
             model.zero_grad()
@@ -36,9 +40,8 @@ def train(args):
 
             outer_loss = torch.tensor(0., device=args.device)
             accuracy = torch.tensor(0., device=args.device)
-            for task_idx, (train_input, train_target, test_input,
-                    test_target) in enumerate(zip(train_inputs, train_targets,
-                    test_inputs, test_targets)):
+            for task_idx, (train_input, train_target, test_input, test_target) in \
+                    enumerate(zip(train_inputs, train_targets, test_inputs, test_targets)):
                 train_logit = model(train_input)
                 inner_loss = F.cross_entropy(train_logit, train_target)
 
@@ -59,9 +62,11 @@ def train(args):
             meta_optimizer.step()
 
             pbar.set_postfix(accuracy='{0:.4f}'.format(accuracy.item()))
+            max_acc = max(max_acc, accuracy.item())
             if batch_idx >= args.num_batches:
                 break
 
+    print('max acc during training is: ', max_acc)
     # Save model
     if args.output_folder is not None:
         filename = os.path.join(args.output_folder, 'maml_omniglot_'
@@ -84,22 +89,22 @@ if __name__ == '__main__':
 
     parser.add_argument('--first-order', action='store_true',
         help='Use the first-order approximation of MAML.')
-    parser.add_argument('--step-size', type=float, default=0.4,
+    parser.add_argument('--step-size', type=float, default=0.01,
         help='Step-size for the gradient step for adaptation (default: 0.4).')
-    parser.add_argument('--hidden-size', type=int, default=64,
+    parser.add_argument('--hidden-size', type=int, default=32,
         help='Number of channels for each convolutional layer (default: 64).')
 
     parser.add_argument('--output-folder', type=str, default=None,
         help='Path to the output folder for saving the model (optional).')
-    parser.add_argument('--batch-size', type=int, default=16,
+    parser.add_argument('--batch-size', type=int, default=32,
         help='Number of tasks in a mini-batch of tasks (default: 16).')
-    parser.add_argument('--num-batches', type=int, default=100,
+    parser.add_argument('--num-batches', type=int, default=1000,
         help='Number of batches the model is trained over (default: 100).')
-    parser.add_argument('--num-workers', type=int, default=1,
+    parser.add_argument('--num-workers', type=int, default=4,
         help='Number of workers for data loading (default: 1).')
     parser.add_argument('--download', action='store_true',
-        help='Download the Omniglot dataset in the data folder.')
-    parser.add_argument('--use-cuda', action='store_true',
+        help='Download the miniImagenet dataset in the data folder.')
+    parser.add_argument('--use-cuda', action='store_false',
         help='Use CUDA if available.')
 
     args = parser.parse_args()
